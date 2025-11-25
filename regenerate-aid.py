@@ -1,14 +1,26 @@
 import requests
 from datetime import datetime, timedelta
 import json
+import time
 
-def regenerate_aid_report(start_date, end_date, template_id):
-    url = "https//reporting-api.astrapay.com/report-service/regenerate"
-    
+def regenerate_aid_report(start_date, end_date, template_id, max_retries=3, retry_delay=30):
+    url = "https://reporting-api.astrapay.com/report-service/regenerate"
+    # url = "http://localhost:8001/report-service/regenerate"
+
     headers = {
         'Content-Type': 'application/json'
     }
-    
+
+    # Determine SFTP destination based on template ID
+    if template_id == 19:  # Master User AID
+    # if template_id == 12:  # Master User AID
+        sftp_destination = "/astrapayapp/new_pipeline_ap/master_user_astrapay/"
+    elif template_id == 26:  # Transaction Astrapay AID
+    # elif template_id == 13:  # Transaction Astrapay AID
+        sftp_destination = "/astrapayapp/new_pipeline_ap/transaction_astrapay/"
+    else:
+        raise ValueError("Invalid template ID. Must be 12 or 13.")
+
     payload = {
         "templateId": template_id,
         "groupType": "SINGLE",
@@ -16,12 +28,22 @@ def regenerate_aid_report(start_date, end_date, template_id):
         "startDate": start_date,
         "endDate": end_date,
         "delimiter": "PIPE",
+        ### FOR PRODUCTION PURPOSES
+        # "sftp": {
+        #     "ipAddress": "cdp-sftp.astrafinancial.co.id",
+        #     "port": 2225,
+        #     "username": "astrapayapp",
+        #     "password": "",
+        #     "destination": sftp_destination,
+        #     "privateKey": "/home/report-service-prd/.ssh/id_rsa"
+        # },
+        ### FOR TESTING PURPOSES ONLY
         "sftp": {
-            "ipAddress": "cdp-sftp.astrafinancial.co.id",
-            "port": 2225,
-            "username": "astrapayapp",
-            "password": "",
-            "destination": "/astrapayapp/new_pipeline_ap/transaction_astrapay/"
+            "ipAddress": "10.42.41.41",
+            "port": "7272",
+            "username": "astrapay",
+            "password": "Partner#AstraP4y",
+            "destination": "/report-service"
         },
         "user": {
             "id": 32729867,
@@ -30,20 +52,61 @@ def regenerate_aid_report(start_date, end_date, template_id):
         "type": "DATA_TRANSFER_AID"
     }
     
-    try:
-        print(f"Making request to: {url}")
-        print(f"Template ID: {template_id}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        
-        print(f"Status Code: {response.status_code}")
-        print(f"Response Body: {response.text}")
-        
-    except requests.RequestException as e:
-        print(f"Request failed: {e}")
-        raise
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"Making request to: {url} (Attempt {attempt}/{max_retries})")
+            print(f"Template ID: {template_id}")
+            if attempt == 1:  # Only show payload on first attempt to reduce clutter
+                print(f"Payload: {json.dumps(payload, indent=2)}")
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=300)  # 5 minute timeout
+            response.raise_for_status()
+            
+            print(f"Status Code: {response.status_code}")
+            print(f"Response Body: {response.text}")
+            return  # Success, exit the function
+            
+        except requests.Timeout:
+            print(f"Request timed out (Attempt {attempt}/{max_retries})")
+            if attempt < max_retries:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("Max retries reached. Request failed due to timeout.")
+                raise
+                
+        except requests.ConnectionError as e:
+            print(f"🔌 Connection error (Attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("Max retries reached. Request failed due to connection error.")
+                raise
+                
+        except requests.HTTPError as e:
+            status_code = e.response.status_code if e.response else 'Unknown'
+            print(f"HTTP error {status_code} (Attempt {attempt}/{max_retries}): {e}")
+            
+            # Don't retry for client errors (4xx), but retry for server errors (5xx)
+            if e.response and 400 <= e.response.status_code < 500:
+                print("Client error (4xx) - not retrying.")
+                raise
+            elif attempt < max_retries:
+                print(f"Server error (5xx) - retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("Max retries reached. Request failed due to server error.")
+                raise
+                
+        except requests.RequestException as e:
+            print(f"Request error (Attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("Max retries reached. Request failed.")
+                raise
 
 def get_date_input(prompt):
     while True:
@@ -96,6 +159,7 @@ def run_batch_requests():
     """Run regenerate requests for all days in September and October 2025"""
     date_ranges = generate_date_ranges_for_months()
     template_ids = [19, 26]  # Two template IDs to process -> 19 (Master User AID), 26 (Transaction Astrapay AID)
+    # template_ids = [12, 13]  # Two template IDs to process -> 12 (Master User AID), 13 (Transaction Astrapay AID)
     total_days = len(date_ranges)
     total_requests = total_days * len(template_ids)  # 2 requests per day
     
@@ -114,7 +178,7 @@ def run_batch_requests():
     request_count = 0
     
     for day_num, (start_date, end_date) in enumerate(date_ranges, 1):
-        print(f"\n📅 DAY {day_num}/{total_days}: {start_date} to {end_date}")
+        print(f"\nDAY {day_num}/{total_days}: {start_date} to {end_date}")
         print("=" * 50)
         
         for template_id in template_ids:
@@ -125,14 +189,14 @@ def run_batch_requests():
             try:
                 regenerate_aid_report(start_date, end_date, template_id)
                 successful_requests += 1
-                print("✅ Request completed successfully")
+                print("Request completed successfully")
             except Exception as e:
                 failed_requests += 1
-                print(f"❌ Request failed: {e}")
+                print(f"Request failed: {e}")
             
             # Add a delay between requests to avoid overwhelming the server
             if request_count < total_requests:
-                import time
+                print(f"Waiting 2 minutes before next request...")
                 time.sleep(120)  # 2 minutes delay between requests
     
     print("\n" + "=" * 60)
@@ -159,13 +223,15 @@ if __name__ == "__main__":
     if choice == "1":
         run_batch_requests()
     elif choice == "2":
-        template_id = int(input("Enter template ID: "))
+        template_id = int(input("Enter template ID (19/26): "))
+        # template_id = int(input("Enter template ID (12/13): "))
         start_date = get_date_input("Enter start date (YYYY-MM-DD HH:MM:SS): ")
         end_date = get_date_input("Enter end date (YYYY-MM-DD HH:MM:SS): ")
         print(f"\nGenerating report for date range: {start_date} to {end_date}")
         regenerate_aid_report(start_date, end_date, template_id)
     elif choice == "3":
-        template_id = int(input("Enter template ID: "))
+        template_id = int(input("Enter template ID (19/26): "))
+        # template_id = int(input("Enter template ID (12/13): "))
         yesterday = datetime.now() - timedelta(days=1)
         start_date = yesterday.strftime("%Y-%m-%d 00:00:00")
         end_date = yesterday.strftime("%Y-%m-%d 23:59:59")
