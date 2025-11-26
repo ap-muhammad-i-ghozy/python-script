@@ -27,24 +27,24 @@ def regenerate_aid_report(start_date, end_date, template_id, max_retries=3, retr
         "fileType": "TXT",
         "startDate": start_date,
         "endDate": end_date,
-        "delimiter": "PIPE",
+        "delimiter": "CARET",
         ### FOR PRODUCTION PURPOSES
-        # "sftp": {
-        #     "ipAddress": "cdp-sftp.astrafinancial.co.id",
-        #     "port": 2225,
-        #     "username": "astrapayapp",
-        #     "password": "",
-        #     "destination": sftp_destination,
-        #     "privateKey": "/home/report-service-prd/.ssh/id_rsa"
-        # },
-        ### FOR TESTING PURPOSES ONLY
         "sftp": {
-            "ipAddress": "10.42.41.41",
-            "port": "7272",
-            "username": "astrapay",
-            "password": "Partner#AstraP4y",
-            "destination": "/report-service"
+            "ipAddress": "cdp-sftp.astrafinancial.co.id",
+            "port": 2225,
+            "username": "astrapayapp",
+            "password": "",
+            "destination": sftp_destination,
+            "privateKey": "/home/report-service-prd/.ssh/id_rsa"
         },
+        ### FOR TESTING PURPOSES ONLY
+        # "sftp": {
+        #     "ipAddress": "10.42.41.41",
+        #     "port": "7272",
+        #     "username": "astrapay",
+        #     "password": "Partner#AstraP4y",
+        #     "destination": "/report-service"
+        # },
         "user": {
             "id": 32729867,
             "name": "Report AstraPay to AID"
@@ -155,7 +155,7 @@ def generate_date_ranges_for_months():
     
     return date_ranges
 
-def run_batch_requests():
+def run_batch_requests(start_from_request=1):
     """Run regenerate requests for all days in September and October 2025"""
     date_ranges = generate_date_ranges_for_months()
     template_ids = [19, 26]  # Two template IDs to process -> 19 (Master User AID), 26 (Transaction Astrapay AID)
@@ -163,9 +163,16 @@ def run_batch_requests():
     total_days = len(date_ranges)
     total_requests = total_days * len(template_ids)  # 2 requests per day
     
+    if start_from_request > 1:
+        print(f"RESUMING BATCH PROCESSING FROM REQUEST #{start_from_request}")
+        print("=" * 60)
+    
     print(f"Will process {total_days} days (September + October 2025)")
     print(f"Each day will have {len(template_ids)} requests (Template IDs: {', '.join(map(str, template_ids))})")
     print(f"Total requests: {total_requests}")
+    if start_from_request > 1:
+        remaining_requests = total_requests - start_from_request + 1
+        print(f"Remaining requests: {remaining_requests} (from {start_from_request} to {total_requests})")
     print("=" * 60)
     
     confirm = input("Do you want to proceed with batch processing? (y/n): ").lower().strip()
@@ -178,35 +185,42 @@ def run_batch_requests():
     request_count = 0
     
     for day_num, (start_date, end_date) in enumerate(date_ranges, 1):
-        print(f"\nDAY {day_num}/{total_days}: {start_date} to {end_date}")
-        print("=" * 50)
-        
         for template_id in template_ids:
             request_count += 1
-            print(f"\n[{request_count}/{total_requests}] Template ID: {template_id}")
+            
+            # Skip requests until we reach the starting point
+            if request_count < start_from_request:
+                continue
+                
+            print(f"\nDAY {day_num}/{total_days}: {start_date} to {end_date}")
+            print("=" * 50)
+            print(f"[{request_count}/{total_requests}] Template ID: {template_id}")
             print("-" * 30)
             
             try:
                 regenerate_aid_report(start_date, end_date, template_id)
                 successful_requests += 1
-                print("Request completed successfully")
+                print("✅ Request completed successfully")
             except Exception as e:
                 failed_requests += 1
-                print(f"Request failed: {e}")
+                print(f"❌ Request failed: {e}")
             
             # Add a delay between requests to avoid overwhelming the server
             if request_count < total_requests:
-                print(f"Waiting 2 minutes before next request...")
-                time.sleep(120)  # 2 minutes delay between requests
+                print(f"⏱Waiting 2 minutes before next request...")
+                time.sleep(60)  # 1 minutes delay between requests
     
     print("\n" + "=" * 60)
     print("BATCH PROCESSING SUMMARY")
     print("=" * 60)
     print(f"Total days processed: {total_days}")
     print(f"Total requests: {total_requests}")
+    if start_from_request > 1:
+        print(f"Started from request: {start_from_request}")
     print(f"Successful: {successful_requests}")
     print(f"Failed: {failed_requests}")
-    print(f"Success rate: {(successful_requests/total_requests)*100:.1f}%")
+    if successful_requests + failed_requests > 0:
+        print(f"Success rate: {(successful_requests/(successful_requests + failed_requests))*100:.1f}%")
     print(f"Template IDs used: {', '.join(map(str, template_ids))}")
 
 if __name__ == "__main__":
@@ -217,8 +231,9 @@ if __name__ == "__main__":
     print("1. Batch process September + October 2025 (daily intervals)")
     print("2. Single date range (custom)")
     print("3. Yesterday's date range")
+    print("4. Continue batch from specific request number")
     
-    choice = input("\nSelect option (1/2/3): ").strip()
+    choice = input("\nSelect option (1/2/3/4): ").strip()
     
     if choice == "1":
         run_batch_requests()
@@ -237,5 +252,19 @@ if __name__ == "__main__":
         end_date = yesterday.strftime("%Y-%m-%d 23:59:59")
         print(f"\nGenerating report for date range: {start_date} to {end_date}")
         regenerate_aid_report(start_date, end_date, template_id)
+    elif choice == "4":
+        while True:
+            try:
+                last_success = int(input("Enter last successful batch number (e.g., 80): "))
+                if last_success <= 0 or last_success >= 122:
+                    print("Please enter a valid number between 1 and 121.")
+                    continue
+                break
+            except ValueError:
+                print("Please enter a valid number.")
+        
+        start_from = last_success + 1
+        print(f"\nWill continue from request #{start_from}/122")
+        run_batch_requests(start_from_request=start_from)
     else:
         print("Invalid choice. Exiting.")
